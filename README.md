@@ -95,3 +95,13 @@ Expected finishing position includes retirements (placed at the back).
 - Safety cars are independent of incidents.
 - The FastF1 loading code could not be exercised against the live API in the build environment (no network); it is covered by a fake-session unit test only. Check the first real run.
 - Demo fallback roster may be outdated.
+
+## Race-control replay (UI)
+
+The top of the dashboard shows an animated top-down track (stylised COTA schematic, not to scale) beside an F1-style timing tower.
+It replays one of the first 12 *simulated* races from the current Monte Carlo run (choose which, and baseline vs scenario).
+The simulator records each car's lap-by-lap cumulative time, tyre compound, pit stops and safety-car laps; the browser interpolates
+between lap boundaries. Play/Pause/Restart, 0.5-8x speed, trails toggle, clickable progress bar (safety-car laps shaded),
+click a car or tower row to see gap, interval, tyre age, stops and the model's win/podium probabilities.
+Animation runs entirely in browser JavaScript (no Streamlit reruns per frame); it is a replay of a *simulated* race, never a live race.
+If JavaScript fails, a static final classification is shown instead.

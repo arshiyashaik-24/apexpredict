@@ -2,5 +2,5 @@ fastf1>=3.4
 numpy>=1.26
 pandas>=2.1
 plotly>=5.18
-streamlit>=1.50
+streamlit>=1.40
 pytest>=7.4

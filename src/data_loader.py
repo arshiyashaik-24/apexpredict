@@ -260,7 +260,7 @@ def load_data(refresh: bool = False, prior_seasons=PRIOR_SEASONS, circuit_years=
     try:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         ff1.Cache.enable_cache(str(CACHE_DIR))
-        ff1.set_log_level("ERROR")
+        ff1.set_log_level("WARNING")
         target_events = _completed_events(ff1, TARGET_YEAR)
     except Exception as exc:  # network / API failure
         return fallback_bundle(f"could not load the {TARGET_YEAR} schedule ({type(exc).__name__}: {exc})")
@@ -334,7 +334,7 @@ def load_weekend(year: int = TARGET_YEAR) -> Weekend:
         import fastf1 as ff1
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         ff1.Cache.enable_cache(str(CACHE_DIR))
-        ff1.set_log_level("ERROR")
+        ff1.set_log_level("WARNING")
         sched = ff1.get_event_schedule(year, include_testing=False)
         ev = sched[sched["Location"].astype(str).str.contains(TARGET_KEYWORD, case=False)]
         if ev.empty:

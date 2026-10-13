@@ -153,6 +153,6 @@ def build_forecast(bundle: DataBundle, weekend: Weekend | None = None, n_sims: i
     else:
         status, label = "provisional", "PROVISIONAL FORECAST - pre-qualifying, grid simulated"
     cfg = SimConfig(n_sims=n_sims, seed=seed, laps=laps, p_sc=float(p_sc), p_vsc=float(p_vsc), p_wet=float(p_wet),
-                    pit_loss_s=float(pit_loss), deg_scale=deg_scale).clamped()
+                    pit_loss_s=float(pit_loss), deg_scale=deg_scale, ref_lap_s=float(ref_lap)).clamped()
     return Forecast(out, cfg, grid, status, label, pd.DataFrame(ctx, columns=["parameter", "value", "source"]),
                     assumptions, n_current_races=n_races)

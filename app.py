@@ -4,14 +4,16 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 from dataclasses import replace
 
 from src import data_loader as dl
 from src.evaluation import backtest
 from src.prediction_model import Forecast, build_forecast
+from src.replay_view import COMPOUNDS, build_html, replay_options, stint_table, team_colour
 from src.race_simulator import MAX_SIMS, SimConfig, compare_results, run_simulation
 
-RED, BG, PANEL, MUTED = "#E10600", "#121317", "#1B1D23", "#9AA0AA"
+RED, BG, PANEL, MUTED = "#E10600", "#0A0B0D", "#14161A", "#8B919C"
 st.set_page_config(page_title="ApexPredict | 2026 US GP", page_icon="🏁", layout="wide")
 st.markdown(f"""<style>
 .stApp {{ background:{BG}; }} h1,h2,h3 {{ letter-spacing:.02em; font-weight:700; }}
@@ -20,6 +22,12 @@ div[data-testid="stMetric"] {{ background:{PANEL}; padding:.8rem 1rem; border-ra
 .pill {{ display:inline-block; padding:.25rem .8rem; border:1px solid {RED}; color:#fff; border-radius:3px;
         font-size:.8rem; letter-spacing:.08em; background:rgba(225,6,0,.15); }}
 .note {{ color:{MUTED}; font-size:.88rem; }}
+
+.wcard {{ background:{PANEL}; border:1px solid #262A31; border-radius:8px; padding:.9rem 1rem; transition:.2s; }}
+.wcard:hover {{ transform:translateY(-3px); border-color:{RED}; box-shadow:0 6px 24px rgba(225,6,0,.18); }}
+.wd {{ font-size:1.5rem; font-weight:700; letter-spacing:.05em; }} .wt {{ color:{MUTED}; font-size:.8rem; }}
+.wp {{ font-size:2.1rem; font-weight:700; margin:.3rem 0 .1rem; }} .ws {{ color:{MUTED}; font-size:.82rem; }}
+iframe {{ border:0; }}
 </style>""", unsafe_allow_html=True)
 
 
@@ -70,6 +78,7 @@ if fc.status == "demo":
 elif fc.status == "provisional":
     st.warning("Provisional: qualifying has not been loaded, so the starting grid is itself simulated. "
                "Refresh after qualifying for a grid-based forecast.")
+hero = st.container()   # race-control replay is rendered here once the scenario run exists
 with st.expander("Data coverage, session status and assumptions"):
     st.write("**Austin weekend sessions:**", weekend.status or "unavailable")
     st.write("**Coverage:**", bundle.coverage or "none")
@@ -87,6 +96,11 @@ with st.expander("Data coverage, session status and assumptions"):
 st.header("Win probability")
 st.caption("Estimates from simulation frequencies, not certainties. Error bars are 95% Wilson intervals for "
            "Monte Carlo sampling error only; they do NOT include model or data uncertainty.")
+wc = st.columns(5)
+for col, (_, r) in zip(wc, S.head(5).iterrows()):
+    col.markdown(f"<div class='wcard' style='border-top:3px solid {team_colour(r.team)}'><div class='wd'>{r.driver}</div>"
+                 f"<div class='wt'>{r.team}</div><div class='wp'>{r.win_p:.1%}</div>"
+                 f"<div class='ws'>Podium {r.podium_p:.0%} &middot; Exp. P{r.exp_pos:.1f}</div></div>", unsafe_allow_html=True)
 top = S.head(15).iloc[::-1]
 fig = go.Figure(go.Bar(
     x=top.win_p * 100, y=top.driver, orientation="h", marker_color=RED,
@@ -101,6 +115,8 @@ tbl.columns = ["Driver", "Team", "Win", "Podium", "Top 5", "Top 10", "Retire", "
 st.dataframe(tbl.style.format({"Win": "{:.1%}", "Podium": "{:.1%}", "Top 5": "{:.1%}", "Top 10": "{:.1%}",
                                "Retire": "{:.1%}", "Exp. pos": "{:.1f}", "Pos. SD": "{:.1f}"}),
              hide_index=True, width="stretch")
+
+strategy_box = st.container()
 
 with st.expander("Model validation (chronological backtest on completed races)"):
     if st.button("Run backtest"):
@@ -180,6 +196,40 @@ if custom is not None:
 if int(sims) != base_cfg.n_sims:   # keep baseline on the same simulation count for a fair comparison
     base = simulate(inputs, replace(base_cfg, n_sims=int(sims)).__dict__, fc.grid)
 scen = simulate(inputs, scen_cfg.__dict__, scen_grid)
+
+with hero:
+    h1, h2 = st.columns([1, 2])
+    which = h1.radio("Replay source", ["Baseline", "Scenario"], horizontal=True)
+    rres = base if which == "Baseline" else scen
+    ropts = replay_options(rres)
+    rk = h2.selectbox("Simulated race to replay (one of the Monte Carlo races)", range(len(ropts)),
+                      format_func=lambda i: ropts[i]) if ropts else None
+    if rk is None:
+        st.info("Replay data unavailable; showing probability charts only.")
+    else:
+        _html = build_html(rres, inputs, rk)   # generated locally from simulator output (trusted)
+        if hasattr(st, "iframe"):
+            st.iframe(_html, height=800)
+        else:                                  # older Streamlit
+            components.html(_html, height=800, scrolling=False)
+        st.caption("A single simulated race from the Monte Carlo run (positions between lap boundaries are "
+                   "interpolated). It illustrates one possible outcome; it is not a live or real race.")
+if rk is not None:
+    with strategy_box:
+        st.subheader("Tyre strategy in the replayed race")
+        stn = stint_table(rres, rk)
+        fs = go.Figure()
+        for cname, ccol in COMPOUNDS.values():
+            sub = stn[stn.compound == cname]
+            fs.add_bar(y=sub.driver, x=sub.laps, base=sub.start - 1, orientation="h", name=cname, marker_color=ccol,
+                       marker_line_color="#0A0B0D", marker_line_width=1, hovertemplate="%{y}: %{x} laps on " + cname + "<extra></extra>")
+        fs.update_layout(barmode="overlay")
+        fs.update_yaxes(categoryorder="array", categoryarray=list(dict.fromkeys(stn.driver))[::-1])
+        fs.update_xaxes(title="Lap", range=[0, base_cfg.laps])
+        st.plotly_chart(style(fs, 560), width="stretch")
+        st.caption("Compound colours: red soft, yellow medium, white hard. Drivers are ordered by finishing position "
+                   "in this replayed race; bars end early for retirements."
+                   + (" This replay is a WET race: the simulator treats tyres as equivalent, so compounds shown are nominal." if bool(rres.replay["wet"][rk]) else ""))
 cmp = compare_results(base, scen)
 changed = (scen_cfg != replace(base_cfg, n_sims=int(sims))) or (scen_grid is not fc.grid)
 st.caption("Baseline and scenario use the same random seed, so differences reflect the inputs you changed."

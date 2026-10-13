@@ -56,6 +56,7 @@ class SimConfig:
     grid_gap_s: float = 0.25      # time gap per grid slot at the start
     sc_laps: int = 4
     sc_bunch_gap_s: float = 0.8
+    ref_lap_s: float = 96.0       # only used to put replays on an absolute time axis; does not change results
 
     def validate(self) -> "SimConfig":
         if not (MIN_SIMS <= self.n_sims <= MAX_SIMS):
@@ -83,6 +84,7 @@ class SimResult:
     podium_combos: pd.DataFrame
     diagnostics: dict
     config: SimConfig = field(default_factory=SimConfig)
+    replay: dict | None = None       # lap-by-lap record of the first few simulated races (for the UI)
 
 
 def wilson_interval(k, n, z=1.96):
@@ -136,7 +138,7 @@ def _strategy_arrays(rng, S, N, L):
     return comps, pit
 
 
-def run_simulation(inputs: pd.DataFrame, config: SimConfig, grid=None) -> SimResult:
+def run_simulation(inputs: pd.DataFrame, config: SimConfig, grid=None, replay_k: int = 12) -> SimResult:
     """inputs: driver, team, race_pace_s, quali_pace_s, pace_sd_s, p_mech, p_inc.
     grid: optional array of starting positions aligned with `inputs` rows.
     If None, qualifying is simulated from quali pace for every race."""
@@ -201,6 +203,10 @@ def run_simulation(inputs: pd.DataFrame, config: SimConfig, grid=None) -> SimRes
     # --- lap loop ------------------------------------------------------------------------
     T = grid_idx * cfg.grid_gap_s + rng.normal(0, 0.4, (S, N))
     alive = np.ones((S, N), bool)
+    K = min(replay_k, S)
+    Treal = T.copy()                         # cumulative time, frozen for retired cars
+    rec_T = np.zeros((K, L + 1, N)); rec_T[:, 0] = T[:K]
+    rec_comp = np.zeros((K, L, N), np.int8); rec_pit = np.zeros((K, L, N), bool)
     for lap in range(1, L + 1):
         st = status[:, lap - 1]
         newly = alive & (retire_lap == lap)
@@ -247,12 +253,26 @@ def run_simulation(inputs: pd.DataFrame, config: SimConfig, grid=None) -> SimRes
             Ts[sc_rows] = np.concatenate([sub[:, :1], sub[:, :1] + np.cumsum(gaps, axis=1)], 1)
         T = Tn.copy()
         np.put_along_axis(T, order, Ts, 1)
+        Treal = np.where(alive, T, Treal)
+        rec_T[:, lap], rec_comp[:, lap - 1], rec_pit[:, lap - 1] = Treal[:K], comp[:K], pitting[:K]
 
     positions = (np.argsort(np.argsort(T, axis=1, kind="stable"), axis=1) + 1).astype(np.int16)
     diag = {"sc_rate": float(sc_on.mean()), "vsc_rate": float(vsc_on.mean()), "wet_rate": float(wet.mean()),
             "mean_dnfs_per_race": float(dnf.sum(1).mean()),
             "pit_stops_per_car": float(((pit_laps <= L).sum(2)).mean())}
-    return summarise(positions, dnf, drivers, inputs["team"].tolist(), cfg, diag)
+    res = summarise(positions, dnf, drivers, inputs["team"].tolist(), cfg, diag)
+    if K:
+        ref = cfg.ref_lap_s
+        st_k = status[:K]
+        extra = np.where(st_k == 2, 0.4 * ref, np.where(st_k == 1, 0.3 * ref, np.where(wet[:K, None], 0.08 * ref, 0.0)))
+        t_abs = rec_T.copy()
+        t_abs[:, 1:] += np.cumsum(ref + extra, axis=1)[:, :, None]   # relative time -> absolute seconds
+        for l in range(1, L + 1):                                   # keep each car's clock strictly increasing
+            t_abs[:, l] = np.maximum(t_abs[:, l], t_abs[:, l - 1] + 0.5 * ref)
+        res.replay = {"t": t_abs, "comp": rec_comp, "pit": rec_pit, "status": st_k.astype(np.int8),
+                      "retire": np.where(dnf[:K], retire_lap[:K], 0), "wet": wet[:K].copy(),
+                      "grid": grid_idx[:K] + 1, "positions": positions[:K]}
+    return res
 
 
 def compare_results(base: SimResult, alt: SimResult) -> pd.DataFrame:
